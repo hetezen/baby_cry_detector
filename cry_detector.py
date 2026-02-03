@@ -1,14 +1,36 @@
 #!/usr/bin/env python3
 import os
-os.environ['JACK_NO_START_SERVER'] = '1'  # Suppress JACK audio server warnings
+import sys
+
+# Suppress JACK and ALSA warnings
+os.environ['JACK_NO_START_SERVER'] = '1'
 
 import pyaudio
 import numpy as np
+
+
+def _create_pyaudio_silently():
+    """Create PyAudio instance with stderr suppressed on Linux to hide JACK warnings."""
+    if not sys.platform.startswith('linux'):
+        return pyaudio.PyAudio()
+
+    # Redirect stderr to /dev/null during PyAudio initialization
+    stderr_fd = os.dup(2)
+    devnull_fd = os.open(os.devnull, os.O_WRONLY)
+    os.dup2(devnull_fd, 2)
+    try:
+        audio = pyaudio.PyAudio()
+    finally:
+        os.dup2(stderr_fd, 2)
+        os.close(stderr_fd)
+        os.close(devnull_fd)
+    return audio
+
+
 from collections import deque
 import time
 import wave
 from datetime import datetime
-import os
 from pushover import Client
 
 # Import Pushover credentials from config file
@@ -53,7 +75,7 @@ ENABLE_PUSHOVER = True and PUSHOVER_USER_KEY and PUSHOVER_API_TOKEN  # Auto-disa
 
 class CryDetector:
     def __init__(self):
-        self.audio = pyaudio.PyAudio()
+        self.audio = _create_pyaudio_silently()
         self.stream = None
         self.initial_start_time = None  # When crying episode first began
         self.last_cry_time = None  # Most recent cry detection
