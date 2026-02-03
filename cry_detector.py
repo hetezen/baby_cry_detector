@@ -37,7 +37,7 @@ VOLUME_THRESHOLD = 1000  # Lower threshold to catch quieter cries
 CRY_RATIO_THRESHOLD = 0.20  # Lower threshold for cry energy ratio
 SMOOTHING_WINDOW = 5  # Number of recent chunks to consider
 CRY_CONFIRMATION_COUNT = 2  # Need this many positive detections in window
-ALERT_WINDOW = 600  # Alert if crying actively happening at 5 minutes (wall clock time)
+ALERT_WINDOW = 600  # Alert if crying actively happening at 10 minutes (wall clock time)
 RESET_WINDOW = 300  # Reset after 5 minutes of silence
 
 # Recording settings
@@ -309,7 +309,7 @@ class CryDetector:
                     if self.last_cry_time is not None:
                         silence_duration = current_time - self.last_cry_time
                         
-                        # Reset after 5 minutes of silence
+                        # Reset after silence exceeds reset_window
                         if silence_duration >= self.reset_window:
                             if self.initial_start_time is not None:
                                 episode_duration = self.last_cry_time - self.initial_start_time
