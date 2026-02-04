@@ -49,24 +49,25 @@ RESET = '\033[0m'
 
 # Audio settings
 RATE = 44100  # Sample rate
-CHUNK = 4096  # Larger chunks for better frequency resolution
+CHUNK = 8192  # Chunks for frequency resolution (~186ms per chunk)
 FORMAT = pyaudio.paInt16
 
 # Cry detection parameters - ADJUSTED FOR MORE SENSITIVITY
 CRY_FREQ_MIN = 400   # Hz - minimum frequency for baby cry (wider range)
 CRY_FREQ_MAX = 2000   # Hz - maximum frequency for baby cry (wider range)
-VOLUME_THRESHOLD = 1000  # Lower threshold to catch quieter cries
-CRY_RATIO_THRESHOLD = 0.20  # Lower threshold for cry energy ratio
+VOLUME_THRESHOLD = 800  # Lower threshold to catch quieter cries
+CRY_RATIO_THRESHOLD = 0.40  # Threshold for cry energy ratio
 SMOOTHING_WINDOW = 5  # Number of recent chunks to consider
 CRY_CONFIRMATION_COUNT = 2  # Need this many positive detections in window
 ALERT_WINDOW = 600  # Alert if crying actively happening at 10 minutes (wall clock time)
 RESET_WINDOW = 300  # Reset after 5 minutes of silence
+MIN_CRY_DURATION = 10  # Seconds of sustained crying before announcing episode (filters brief sounds)
 
 # Recording settings
 RECORDINGS_DIR = '/media/tinybaby/ESD-USB/recordings'
 RECORDING_GRACE_PERIOD = 10  # Keep recording for 10 seconds after crying stops
 MIN_RECORDING_DURATION = 10  # Only save recordings at least 10 seconds long
-MAX_RECORDING_FRAMES = 10000  # ~15 minutes at 44100/4096 (~10 chunks/sec) - prevents unbounded memory
+MAX_RECORDING_FRAMES = 5000  # ~15 minutes at 44100/8192 (~5.4 chunks/sec) - prevents unbounded memory
 
 # Pushover emergency notification settings
 PUSHOVER_RETRY = 30   # Retry every 30 seconds if not acknowledged
@@ -77,10 +78,11 @@ class CryDetector:
     def __init__(self):
         self.audio = _create_pyaudio_silently()
         self.stream = None
-        self.initial_start_time = None  # When crying episode first began
+        self.initial_start_time = None  # When confirmed crying episode began
         self.last_cry_time = None  # Most recent cry detection
         self.recent_detections = deque(maxlen=SMOOTHING_WINDOW)
         self.alert_sent = False  # Track if we've already alerted for this episode
+        self.potential_cry_start_time = None  # When crying first detected (before confirmation)
         
         # Recording state - only record during crying episodes
         self.is_recording = False
@@ -94,6 +96,7 @@ class CryDetector:
         self.enable_pushover = False
         self.alert_window = ALERT_WINDOW
         self.reset_window = RESET_WINDOW
+        self.min_cry_duration = MIN_CRY_DURATION
 
         # Initialize Pushover client
         if PUSHOVER_USER_KEY and PUSHOVER_API_TOKEN:
@@ -136,9 +139,10 @@ class CryDetector:
             frames_per_buffer=CHUNK
         )
         print("Cry detector started. Monitoring audio...")
-        print(f"Configuration: {CRY_FREQ_MIN}-{CRY_FREQ_MAX} Hz")
+        print(f"Configuration: {CRY_FREQ_MIN}-{CRY_FREQ_MAX} Hz, Chunk: {CHUNK} samples (~{CHUNK/RATE*1000:.0f}ms)")
         print(f"Volume threshold: {VOLUME_THRESHOLD}, Ratio threshold: {CRY_RATIO_THRESHOLD}")
         print(f"Confirmation: {CRY_CONFIRMATION_COUNT}/{SMOOTHING_WINDOW} chunks")
+        print(f"Min cry duration: {self.min_cry_duration} seconds (filters brief sounds)")
         print(f"Alert window: {self.alert_window/60:.0f} minutes")
         print(f"Reset after {self.reset_window/60:.0f} minutes of silence")
         if self.enable_pushover and self.pushover_client:
@@ -244,24 +248,47 @@ class CryDetector:
 
                 self.chunk_count += 1
                 current_time = time.time()
-                
+
                 # Analyze for crying
                 is_crying_now, volume, freq, ratio = self.analyze_audio(audio_data)
-                
+
                 # Add to recent detections for smoothing
                 self.recent_detections.append(is_crying_now)
-                
+
                 # Count positive detections in recent window
                 cry_count = sum(self.recent_detections)
-                
-                # Determine if baby is crying based on smoothed detection
-                crying = cry_count >= CRY_CONFIRMATION_COUNT
-                
-                # Update last detected cry time when crying is detected
+
+                # Smoothed detection (immediate, before min_cry_duration check)
+                smoothed_crying = cry_count >= CRY_CONFIRMATION_COUNT
+
+                # Track potential cry start time for sustained detection
+                if smoothed_crying:
+                    if self.potential_cry_start_time is None:
+                        self.potential_cry_start_time = current_time
+                    self.last_cry_time = current_time
+                else:
+                    # Check if brief silence should reset potential cry
+                    if self.potential_cry_start_time is not None and self.last_cry_time is not None:
+                        silence_duration = current_time - self.last_cry_time
+                        if silence_duration >= 5:
+                            # Brief sound ended - not sustained crying
+                            brief_duration = self.last_cry_time - self.potential_cry_start_time
+                            if brief_duration < self.min_cry_duration:
+                                print(f"{YELLOW}⏭ Ignored brief sound ({brief_duration:.1f}s < {self.min_cry_duration}s){RESET}")
+                            self.potential_cry_start_time = None
+
+                # CRYING requires sustained smoothed detection for min_cry_duration
+                crying = False
+                if smoothed_crying and self.potential_cry_start_time is not None:
+                    sustained_duration = current_time - self.potential_cry_start_time
+                    if sustained_duration >= self.min_cry_duration:
+                        crying = True
+
+                # Update last detected cry time when confirmed crying
                 if crying:
                     self.last_detected_cry_time = current_time
-                
-                # Handle recording with grace period
+
+                # Handle recording with grace period (only for confirmed crying)
                 if self.enable_recording and crying:
                     if not self.is_recording:
                         # Start recording this episode
@@ -273,12 +300,12 @@ class CryDetector:
                     # Add audio chunk to current episode (with memory limit)
                     if len(self.current_episode_frames) < MAX_RECORDING_FRAMES:
                         self.current_episode_frames.append(audio_data)
-                
+
                 elif self.enable_recording and self.is_recording:
                     # Not currently crying but we're recording
                     # Continue recording during grace period
                     grace_elapsed = current_time - self.last_detected_cry_time if self.last_detected_cry_time else 0
-                    
+
                     if grace_elapsed < RECORDING_GRACE_PERIOD:
                         # Still within grace period - keep recording (with memory limit)
                         if len(self.current_episode_frames) < MAX_RECORDING_FRAMES:
@@ -292,24 +319,22 @@ class CryDetector:
                         # Clear for next episode
                         self.current_episode_frames = []
                         self.episode_start_time = None
-                
-                # Handle crying detection (alert logic)
+
+                # Handle confirmed crying detection (alert logic)
                 if crying:
-                    # Update last cry time
-                    self.last_cry_time = current_time
-                    
                     # Set initial start time if this is a new episode
                     if self.initial_start_time is None:
-                        self.initial_start_time = current_time
+                        self.initial_start_time = self.potential_cry_start_time
                         self.alert_sent = False
-                        print(f"\n{RED}🍼 Baby started crying! (Vol: {volume:.0f}, Freq: {freq:.1f} Hz){RESET}")
-                    
+                        sustained_duration = current_time - self.potential_cry_start_time
+                        print(f"\n{RED}🍼 Baby started crying! (sustained for {sustained_duration:.1f}s, Vol: {volume:.0f}, Freq: {freq:.1f} Hz){RESET}")
+
                     # Check if we should alert
                     elapsed_time = current_time - self.initial_start_time
                     if elapsed_time >= self.alert_window and not self.alert_sent:
                         print(f"\n{RED}🚨 ALERT! Baby has been crying for {elapsed_time/60:.1f} minutes!{RESET}")
                         print(f"{RED}   (Episode started at {datetime.fromtimestamp(self.initial_start_time).strftime('%H:%M:%S')}, currently crying){RESET}")
-                        
+
                         # Send EMERGENCY Pushover notification
                         if self.pushover_client and self.enable_pushover:
                             try:
@@ -323,34 +348,34 @@ class CryDetector:
                                 print(f"{GREEN}✓ Emergency notification sent! (will retry every {PUSHOVER_RETRY}s until acknowledged){RESET}")
                             except Exception as e:
                                 print(f"{RED}✗ Failed to send notification: {e}{RESET}")
-                        
+
                         self.alert_sent = True
-                
+
                 else:
-                    # Not currently crying - check if we should reset episode
-                    if self.last_cry_time is not None:
+                    # Not crying - check if we should reset confirmed episode
+                    if self.initial_start_time is not None and self.last_cry_time is not None:
                         silence_duration = current_time - self.last_cry_time
-                        
-                        # Reset after silence exceeds reset_window
+
+                        # Reset after silence window
                         if silence_duration >= self.reset_window:
-                            if self.initial_start_time is not None:
-                                episode_duration = self.last_cry_time - self.initial_start_time
-                                print(f"\n{GREEN}✓ Baby settled! Episode duration: {episode_duration/60:.1f} minutes{RESET}")
-                                print(f"{GREEN}   (Silent for {silence_duration/60:.1f} minutes){RESET}")
-                            
+                            episode_duration = self.last_cry_time - self.initial_start_time
+                            print(f"\n{GREEN}✓ Baby settled! Episode duration: {episode_duration/60:.1f} minutes{RESET}")
+                            print(f"{GREEN}   (Silent for {silence_duration/60:.1f} minutes){RESET}")
+
                             # Reset everything
                             self.initial_start_time = None
                             self.last_cry_time = None
+                            self.potential_cry_start_time = None
                             self.alert_sent = False
-                        
+
         except KeyboardInterrupt:
             print(f"\n\n{YELLOW}Stopping cry detector...{RESET}")
-            
+
             # Save any ongoing recording
             if self.is_recording and self.current_episode_frames:
                 print(f"{YELLOW}Saving final episode recording...{RESET}")
                 self.save_episode_recording()
-            
+
             if self.initial_start_time is not None and self.last_cry_time is not None:
                 episode_duration = self.last_cry_time - self.initial_start_time
                 print(f"Final episode duration: {episode_duration/60:.1f} minutes")
@@ -384,6 +409,8 @@ if __name__ == "__main__":
                         help='Minutes of crying before alert (default: 10)')
     parser.add_argument('--reset', type=int, default=5,
                         help='Minutes of silence before episode reset (default: 5)')
+    parser.add_argument('--min-cry', type=int, default=10,
+                        help='Seconds of sustained crying before announcing episode (default: 10)')
     args = parser.parse_args()
 
     detector = CryDetector()
@@ -391,5 +418,6 @@ if __name__ == "__main__":
     detector.enable_pushover = args.pushover and PUSHOVER_USER_KEY and PUSHOVER_API_TOKEN
     detector.alert_window = args.alert * 60  # Convert minutes to seconds
     detector.reset_window = args.reset * 60
+    detector.min_cry_duration = args.min_cry
     detector.start()
     detector.monitor()

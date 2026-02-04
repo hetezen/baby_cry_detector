@@ -5,7 +5,11 @@ A real-time audio-based baby cry detection system using frequency analysis. Moni
 ## Features
 
 - **Real-time cry detection** using FFT frequency analysis
-- **Smoothed detection** to reduce false positives (requires multiple confirmations)
+- **Three-level detection** to reduce false positives:
+  - Chunk-level detection (is_crying_now)
+  - Smoothed detection (multiple chunks positive)
+  - Sustained detection (crying for min_cry_duration)
+- **Brief sound filtering** - ignores coughs and short sounds under the minimum cry duration
 - **Episode tracking** with automatic reset after silence
 - **Optional audio recording** of crying episodes
 - **Pushover notifications** for emergency alerts (production version)
@@ -27,6 +31,7 @@ For local testing on a laptop/desktop. Features:
 - Uses default system microphone
 - Configurable thresholds via command line
 - No external notification dependencies
+- Shorter default windows for faster testing
 
 ## Installation
 
@@ -61,17 +66,21 @@ python cry_detector_local.py -v 500 -r 0.15
 # Custom alert/reset windows
 python cry_detector_local.py --alert 60 --reset 20
 
+# Custom minimum cry duration (filters brief sounds)
+python cry_detector_local.py --min-cry 10
+
 # Specify audio device
 python cry_detector_local.py -d 0
 ```
 
 **Options:**
 - `-d, --device` - Audio input device index
-- `-v, --volume` - Volume threshold (default: 1000)
-- `-r, --ratio` - Cry frequency ratio threshold (default: 0.2)
+- `-v, --volume` - Volume threshold
+- `-r, --ratio` - Cry frequency ratio threshold
 - `--record` - Enable recording of crying episodes
-- `--alert` - Seconds of crying before alert (default: 30)
-- `--reset` - Seconds of silence before episode reset (default: 10)
+- `--alert` - Seconds of crying before alert
+- `--reset` - Seconds of silence before episode reset
+- `--min-cry` - Seconds of sustained crying before confirming episode
 
 ### Production (Raspberry Pi)
 
@@ -88,15 +97,19 @@ python cry_detector.py --pushover
 # Custom alert/reset windows (in minutes)
 python cry_detector.py --alert 5 --reset 3
 
+# Custom minimum cry duration (in seconds)
+python cry_detector.py --min-cry 10
+
 # All options
-python cry_detector.py --record --pushover --alert 10 --reset 5
+python cry_detector.py --record --pushover --alert 10 --reset 5 --min-cry 10
 ```
 
 **Options:**
 - `--record` - Enable recording of crying episodes
 - `--pushover` - Enable Pushover emergency notifications
-- `--alert` - Minutes of crying before alert (default: 10)
-- `--reset` - Minutes of silence before episode reset (default: 5)
+- `--alert` - Minutes of crying before alert
+- `--reset` - Minutes of silence before episode reset
+- `--min-cry` - Seconds of sustained crying before confirming episode
 
 ### Pushover Setup (Production)
 
@@ -109,11 +122,13 @@ PUSHOVER_API_TOKEN = "your_api_token"
 
 ## Detection Algorithm
 
-1. Audio is captured in chunks and analyzed using FFT
-2. Cry detection triggers based on volume and frequency characteristics
-3. Smoothing requires multiple confirmations to reduce false positives
-4. Alert triggers after sustained crying exceeds the alert window
-5. Episode resets after silence exceeds the reset window
+1. **Chunk Analysis**: Audio is captured in chunks and analyzed using FFT
+2. **Chunk Detection** (`is_crying_now`): Each chunk is evaluated for volume and cry frequency characteristics
+3. **Smoothed Detection** (`smoothed_crying`): Requires multiple positive detections in recent chunks to reduce noise
+4. **Sustained Detection** (`crying`): Requires smoothed_crying to persist for `min_cry_duration` seconds (filters brief sounds like coughs)
+5. **Gap Tolerance**: Brief silences within a crying episode don't reset the sustained detection
+6. **Alert**: Triggers after sustained crying exceeds the alert window
+7. **Reset**: Episode resets after silence exceeds the reset window
 
 ## License
 
