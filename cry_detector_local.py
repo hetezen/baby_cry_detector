@@ -32,6 +32,7 @@ CRY_CONFIRMATION_COUNT = 2  # Need this many positive detections in window
 ALERT_WINDOW = 30  # Shorter for testing: alert after 30 seconds
 RESET_WINDOW = 10  # Shorter for testing: reset after 10 seconds of silence
 MIN_CRY_DURATION = 5  # Seconds of sustained crying before announcing episode (filters brief sounds)
+SILENCE_GAP = 5  # Seconds of silence within crying that resets potential cry detection
 
 # Recording settings (local directory)
 RECORDINGS_DIR = os.path.expanduser('~/Documents/babymonitor_recordings')
@@ -63,6 +64,7 @@ class CryDetectorLocal:
         self.alert_window = ALERT_WINDOW
         self.reset_window = RESET_WINDOW
         self.min_cry_duration = MIN_CRY_DURATION
+        self.silence_gap = SILENCE_GAP
 
     def list_audio_devices(self):
         """List all available audio input devices"""
@@ -100,6 +102,7 @@ class CryDetectorLocal:
         print(f"Volume threshold: {self.volume_threshold}, Ratio threshold: {self.cry_ratio_threshold}")
         print(f"Confirmation: {CRY_CONFIRMATION_COUNT}/{SMOOTHING_WINDOW} chunks")
         print(f"Min cry duration: {self.min_cry_duration} seconds (filters brief sounds)")
+        print(f"Silence gap: {self.silence_gap} seconds (resets potential cry)")
         print(f"Alert window: {self.alert_window} seconds")
         print(f"Reset after {self.reset_window} seconds of silence")
         if self.enable_recording:
@@ -226,7 +229,7 @@ class CryDetectorLocal:
                     # Check if brief silence should reset potential cry
                     if self.potential_cry_start_time is not None and self.last_cry_time is not None:
                         silence_duration = current_time - self.last_cry_time
-                        if silence_duration >= 5:
+                        if silence_duration >= self.silence_gap:
                             # Brief sound ended - not sustained crying
                             brief_duration = self.last_cry_time - self.potential_cry_start_time
                             if brief_duration < self.min_cry_duration:
@@ -351,12 +354,14 @@ if __name__ == "__main__":
                         help=f'Cry ratio threshold (default: {CRY_RATIO_THRESHOLD})')
     parser.add_argument('--record', action='store_true', default=False,
                         help='Enable recording of crying episodes (default: disabled)')
-    parser.add_argument('--alert', type=int, default=30,
-                        help='Seconds of crying before alert (default: 30)')
-    parser.add_argument('--reset', type=int, default=10,
-                        help='Seconds of silence before episode reset (default: 10)')
-    parser.add_argument('--min-cry', type=int, default=5,
-                        help='Seconds of sustained crying before announcing episode (default: 5)')
+    parser.add_argument('--alert', type=int, default=ALERT_WINDOW,
+                        help=f'Seconds of crying before alert (default: {ALERT_WINDOW})')
+    parser.add_argument('--reset', type=int, default=RESET_WINDOW,
+                        help=f'Seconds of silence before episode reset (default: {RESET_WINDOW})')
+    parser.add_argument('--min-cry', type=int, default=MIN_CRY_DURATION,
+                        help=f'Seconds of sustained crying before announcing episode (default: {MIN_CRY_DURATION})')
+    parser.add_argument('--silence-gap', type=int, default=SILENCE_GAP,
+                        help=f'Seconds of silence within crying that resets detection (default: {SILENCE_GAP})')
     args = parser.parse_args()
 
     detector = CryDetectorLocal()
@@ -366,5 +371,6 @@ if __name__ == "__main__":
     detector.alert_window = args.alert
     detector.reset_window = args.reset
     detector.min_cry_duration = args.min_cry
+    detector.silence_gap = args.silence_gap
     detector.start(device_index=args.device)
     detector.monitor()

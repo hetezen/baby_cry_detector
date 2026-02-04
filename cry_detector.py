@@ -62,6 +62,7 @@ CRY_CONFIRMATION_COUNT = 2  # Need this many positive detections in window
 ALERT_WINDOW = 600  # Alert if crying actively happening at 10 minutes (wall clock time)
 RESET_WINDOW = 300  # Reset after 5 minutes of silence
 MIN_CRY_DURATION = 10  # Seconds of sustained crying before announcing episode (filters brief sounds)
+SILENCE_GAP = 5  # Seconds of silence within crying that resets potential cry detection
 
 # Recording settings
 RECORDINGS_DIR = '/media/tinybaby/ESD-USB/recordings'
@@ -92,11 +93,14 @@ class CryDetector:
         self.chunk_count = 0  # For deterministic debug logging
         
         # Configurable options (can be overridden before start())
+        self.volume_threshold = VOLUME_THRESHOLD
+        self.cry_ratio_threshold = CRY_RATIO_THRESHOLD
         self.enable_recording = False
         self.enable_pushover = False
         self.alert_window = ALERT_WINDOW
         self.reset_window = RESET_WINDOW
         self.min_cry_duration = MIN_CRY_DURATION
+        self.silence_gap = SILENCE_GAP
 
         # Initialize Pushover client
         if PUSHOVER_USER_KEY and PUSHOVER_API_TOKEN:
@@ -140,9 +144,10 @@ class CryDetector:
         )
         print("Cry detector started. Monitoring audio...")
         print(f"Configuration: {CRY_FREQ_MIN}-{CRY_FREQ_MAX} Hz, Chunk: {CHUNK} samples (~{CHUNK/RATE*1000:.0f}ms)")
-        print(f"Volume threshold: {VOLUME_THRESHOLD}, Ratio threshold: {CRY_RATIO_THRESHOLD}")
+        print(f"Volume threshold: {self.volume_threshold}, Ratio threshold: {self.cry_ratio_threshold}")
         print(f"Confirmation: {CRY_CONFIRMATION_COUNT}/{SMOOTHING_WINDOW} chunks")
         print(f"Min cry duration: {self.min_cry_duration} seconds (filters brief sounds)")
+        print(f"Silence gap: {self.silence_gap} seconds (resets potential cry)")
         print(f"Alert window: {self.alert_window/60:.0f} minutes")
         print(f"Reset after {self.reset_window/60:.0f} minutes of silence")
         if self.enable_pushover and self.pushover_client:
@@ -179,9 +184,9 @@ class CryDetector:
         cry_ratio = cry_energy / total_energy if total_energy > 0 else 0
         
         # Detect cry based on multiple criteria
-        has_volume = volume > VOLUME_THRESHOLD
+        has_volume = volume > self.volume_threshold
         in_cry_freq = CRY_FREQ_MIN <= dominant_freq <= CRY_FREQ_MAX
-        has_cry_energy = cry_ratio > CRY_RATIO_THRESHOLD
+        has_cry_energy = cry_ratio > self.cry_ratio_threshold
         
         is_crying_now = has_volume and (in_cry_freq or has_cry_energy)
         
@@ -270,7 +275,7 @@ class CryDetector:
                     # Check if brief silence should reset potential cry
                     if self.potential_cry_start_time is not None and self.last_cry_time is not None:
                         silence_duration = current_time - self.last_cry_time
-                        if silence_duration >= 5:
+                        if silence_duration >= self.silence_gap:
                             # Brief sound ended - not sustained crying
                             brief_duration = self.last_cry_time - self.potential_cry_start_time
                             if brief_duration < self.min_cry_duration:
@@ -401,23 +406,32 @@ if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser(description='Baby cry detector with USB audio and Pushover notifications')
+    parser.add_argument('-v', '--volume', type=int, default=VOLUME_THRESHOLD,
+                        help=f'Volume threshold (default: {VOLUME_THRESHOLD})')
+    parser.add_argument('-r', '--ratio', type=float, default=CRY_RATIO_THRESHOLD,
+                        help=f'Cry ratio threshold (default: {CRY_RATIO_THRESHOLD})')
     parser.add_argument('--record', action='store_true', default=False,
                         help='Enable recording of crying episodes (default: disabled)')
     parser.add_argument('--pushover', action='store_true', default=False,
                         help='Enable Pushover emergency notifications (default: disabled)')
-    parser.add_argument('--alert', type=int, default=10,
-                        help='Minutes of crying before alert (default: 10)')
-    parser.add_argument('--reset', type=int, default=5,
-                        help='Minutes of silence before episode reset (default: 5)')
-    parser.add_argument('--min-cry', type=int, default=10,
-                        help='Seconds of sustained crying before announcing episode (default: 10)')
+    parser.add_argument('--alert', type=int, default=ALERT_WINDOW // 60,
+                        help=f'Minutes of crying before alert (default: {ALERT_WINDOW // 60})')
+    parser.add_argument('--reset', type=int, default=RESET_WINDOW // 60,
+                        help=f'Minutes of silence before episode reset (default: {RESET_WINDOW // 60})')
+    parser.add_argument('--min-cry', type=int, default=MIN_CRY_DURATION,
+                        help=f'Seconds of sustained crying before announcing episode (default: {MIN_CRY_DURATION})')
+    parser.add_argument('--silence-gap', type=int, default=SILENCE_GAP,
+                        help=f'Seconds of silence within crying that resets detection (default: {SILENCE_GAP})')
     args = parser.parse_args()
 
     detector = CryDetector()
+    detector.volume_threshold = args.volume
+    detector.cry_ratio_threshold = args.ratio
     detector.enable_recording = args.record
     detector.enable_pushover = args.pushover and PUSHOVER_USER_KEY and PUSHOVER_API_TOKEN
     detector.alert_window = args.alert * 60  # Convert minutes to seconds
     detector.reset_window = args.reset * 60
     detector.min_cry_duration = args.min_cry
+    detector.silence_gap = args.silence_gap
     detector.start()
     detector.monitor()

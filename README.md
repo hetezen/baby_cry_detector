@@ -81,6 +81,7 @@ python cry_detector_local.py -d 0
 - `--alert` - Seconds of crying before alert
 - `--reset` - Seconds of silence before episode reset
 - `--min-cry` - Seconds of sustained crying before confirming episode
+- `--silence-gap` - Seconds of silence within crying that resets detection
 
 ### Production (Raspberry Pi)
 
@@ -105,11 +106,14 @@ python cry_detector.py --record --pushover --alert 10 --reset 5 --min-cry 10
 ```
 
 **Options:**
+- `-v, --volume` - Volume threshold
+- `-r, --ratio` - Cry frequency ratio threshold
 - `--record` - Enable recording of crying episodes
 - `--pushover` - Enable Pushover emergency notifications
 - `--alert` - Minutes of crying before alert
 - `--reset` - Minutes of silence before episode reset
 - `--min-cry` - Seconds of sustained crying before confirming episode
+- `--silence-gap` - Seconds of silence within crying that resets detection
 
 ### Pushover Setup (Production)
 
