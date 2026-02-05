@@ -30,6 +30,7 @@ def _create_pyaudio_silently():
 from collections import deque
 import time
 import wave
+import urllib.request
 from datetime import datetime
 from pushover import Client
 
@@ -102,6 +103,14 @@ class CryDetector:
         self.min_cry_duration = MIN_CRY_DURATION
         self.silence_gap = SILENCE_GAP
 
+        # Healthcheck settings
+        self.healthcheck_url = None
+        self.heartbeat_interval = 300  # 5 minutes in seconds
+        self.last_heartbeat_time = None
+
+        # Auto-stop settings
+        self.stop_time = None  # datetime.time object, e.g. 07:00
+
         # Initialize Pushover client
         if PUSHOVER_USER_KEY and PUSHOVER_API_TOKEN:
             try:
@@ -159,7 +168,27 @@ class CryDetector:
             print(f"{GREEN}Recording grace period: {RECORDING_GRACE_PERIOD}s, Min duration: {MIN_RECORDING_DURATION}s{RESET}")
         else:
             print(f"{YELLOW}Recording: Disabled (use --record to enable){RESET}")
-        
+        if self.stop_time:
+            print(f"{GREEN}Auto-stop: {self.stop_time.strftime('%H:%M')}{RESET}")
+        else:
+            print(f"{YELLOW}Auto-stop: Disabled (use --stop-at HH:MM to enable){RESET}")
+        if self.healthcheck_url:
+            print(f"{GREEN}Healthcheck: Enabled (ping every {self.heartbeat_interval // 60} min){RESET}")
+        else:
+            print(f"{YELLOW}Healthcheck: Disabled (use --healthcheck URL to enable){RESET}")
+
+    def send_heartbeat(self):
+        """Send heartbeat ping to Healthchecks.io"""
+        if not self.healthcheck_url:
+            return
+        try:
+            urllib.request.urlopen(self.healthcheck_url, timeout=10)
+            timestamp = datetime.now().strftime("%H:%M:%S")
+            print(f"{GREEN}[{timestamp}] ♥ Heartbeat sent{RESET}")
+        except Exception as e:
+            timestamp = datetime.now().strftime("%H:%M:%S")
+            print(f"{YELLOW}[{timestamp}] ⚠ Heartbeat failed: {e}{RESET}")
+
     def analyze_audio(self, audio_data):
         """Analyze audio chunk for crying"""
         # Convert to numpy array
@@ -254,6 +283,21 @@ class CryDetector:
                 self.chunk_count += 1
                 current_time = time.time()
 
+                # Check if we should auto-stop
+                if self.stop_time:
+                    now = datetime.now().time()
+                    # Stop if current time matches stop time (within 1-second window)
+                    if now.hour == self.stop_time.hour and now.minute == self.stop_time.minute and now.second < 2:
+                        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        print(f"\n{GREEN}[{timestamp}] Auto-stop time reached ({self.stop_time.strftime('%H:%M')}). Shutting down...{RESET}")
+                        break
+
+                # Send heartbeat if enabled and interval has elapsed
+                if self.healthcheck_url:
+                    if self.last_heartbeat_time is None or (current_time - self.last_heartbeat_time) >= self.heartbeat_interval:
+                        self.send_heartbeat()
+                        self.last_heartbeat_time = current_time
+
                 # Analyze for crying
                 is_crying_now, volume, freq, ratio = self.analyze_audio(audio_data)
 
@@ -332,12 +376,14 @@ class CryDetector:
                         self.initial_start_time = self.potential_cry_start_time
                         self.alert_sent = False
                         sustained_duration = current_time - self.potential_cry_start_time
-                        print(f"\n{RED}🍼 Baby started crying! (sustained for {sustained_duration:.1f}s, Vol: {volume:.0f}, Freq: {freq:.1f} Hz){RESET}")
+                        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        print(f"\n{RED}[{timestamp}] 🙁 Baby started crying! (sustained for {sustained_duration:.1f}s, Vol: {volume:.0f}, Freq: {freq:.1f} Hz){RESET}")
 
                     # Check if we should alert
                     elapsed_time = current_time - self.initial_start_time
                     if elapsed_time >= self.alert_window and not self.alert_sent:
-                        print(f"\n{RED}🚨 ALERT! Baby has been crying for {elapsed_time/60:.1f} minutes!{RESET}")
+                        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        print(f"\n{RED}[{timestamp}] 🚨 ALERT! Baby has been crying for {elapsed_time/60:.1f} minutes!{RESET}")
                         print(f"{RED}   (Episode started at {datetime.fromtimestamp(self.initial_start_time).strftime('%H:%M:%S')}, currently crying){RESET}")
 
                         # Send EMERGENCY Pushover notification
@@ -364,7 +410,8 @@ class CryDetector:
                         # Reset after silence window
                         if silence_duration >= self.reset_window:
                             episode_duration = self.last_cry_time - self.initial_start_time
-                            print(f"\n{GREEN}✓ Baby settled! Episode duration: {episode_duration/60:.1f} minutes{RESET}")
+                            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                            print(f"\n{GREEN}[{timestamp}] ☺️ Baby settled! Episode duration: {episode_duration/60:.1f} minutes{RESET}")
                             print(f"{GREEN}   (Silent for {silence_duration/60:.1f} minutes){RESET}")
 
                             # Reset everything
@@ -422,6 +469,12 @@ if __name__ == "__main__":
                         help=f'Seconds of sustained crying before announcing episode (default: {MIN_CRY_DURATION})')
     parser.add_argument('--silence-gap', type=int, default=SILENCE_GAP,
                         help=f'Seconds of silence within crying that resets detection (default: {SILENCE_GAP})')
+    parser.add_argument('--healthcheck', type=str, default=None,
+                        help='Healthchecks.io ping URL for heartbeat monitoring')
+    parser.add_argument('--heartbeat', type=int, default=5,
+                        help='Heartbeat interval in minutes (default: 5)')
+    parser.add_argument('--stop-at', type=str, default=None,
+                        help='Time to auto-stop the script (HH:MM format, e.g. 07:00)')
     args = parser.parse_args()
 
     detector = CryDetector()
@@ -433,5 +486,14 @@ if __name__ == "__main__":
     detector.reset_window = args.reset * 60
     detector.min_cry_duration = args.min_cry
     detector.silence_gap = args.silence_gap
+    detector.healthcheck_url = args.healthcheck
+    detector.heartbeat_interval = args.heartbeat * 60  # Convert minutes to seconds
+    if args.stop_at:
+        try:
+            h, m = args.stop_at.split(':')
+            detector.stop_time = datetime.strptime(f"{h}:{m}", "%H:%M").time()
+        except ValueError:
+            print(f"Invalid --stop-at format: '{args.stop_at}'. Use HH:MM (e.g. 07:00)")
+            exit(1)
     detector.start()
     detector.monitor()

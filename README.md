@@ -13,6 +13,7 @@ A real-time audio-based baby cry detection system using frequency analysis. Moni
 - **Episode tracking** with automatic reset after silence
 - **Optional audio recording** of crying episodes
 - **Pushover notifications** for emergency alerts (production version)
+- **Healthchecks.io integration** for monitoring Pi/script uptime
 - **Auto-reconnect** on audio device disconnect
 
 ## Scripts
@@ -22,6 +23,7 @@ A real-time audio-based baby cry detection system using frequency analysis. Moni
 Designed for deployment on a Raspberry Pi with a USB microphone. Features:
 - USB audio device auto-detection
 - Pushover emergency notifications (requires acknowledgment)
+- Healthchecks.io heartbeat for uptime monitoring
 - Configurable alert and silence windows
 - Saves recordings to USB drive
 
@@ -71,6 +73,9 @@ python cry_detector_local.py --min-cry 10
 
 # Specify audio device
 python cry_detector_local.py -d 0
+
+# Auto-stop at 7am
+python cry_detector_local.py --stop-at 07:00
 ```
 
 **Options:**
@@ -82,6 +87,7 @@ python cry_detector_local.py -d 0
 - `--reset` - Seconds of silence before episode reset
 - `--min-cry` - Seconds of sustained crying before confirming episode
 - `--silence-gap` - Seconds of silence within crying that resets detection
+- `--stop-at` - Time to auto-stop the script (HH:MM format, e.g. 07:00)
 
 ### Production (Raspberry Pi)
 
@@ -101,8 +107,17 @@ python cry_detector.py --alert 5 --reset 3
 # Custom minimum cry duration (in seconds)
 python cry_detector.py --min-cry 10
 
+# With healthcheck monitoring (alerts if Pi goes down)
+python cry_detector.py --healthcheck https://hc-ping.com/your-uuid
+
+# Custom heartbeat interval (ping every 10 minutes)
+python cry_detector.py --healthcheck https://hc-ping.com/your-uuid --heartbeat 10
+
+# Auto-stop at 7am
+python cry_detector.py --stop-at 07:00
+
 # All options
-python cry_detector.py --record --pushover --alert 10 --reset 5 --min-cry 10
+python cry_detector.py --record --pushover --alert 10 --reset 5 --min-cry 10 --stop-at 07:00 --healthcheck https://hc-ping.com/your-uuid
 ```
 
 **Options:**
@@ -114,6 +129,9 @@ python cry_detector.py --record --pushover --alert 10 --reset 5 --min-cry 10
 - `--reset` - Minutes of silence before episode reset
 - `--min-cry` - Seconds of sustained crying before confirming episode
 - `--silence-gap` - Seconds of silence within crying that resets detection
+- `--stop-at` - Time to auto-stop the script (HH:MM format, e.g. 07:00)
+- `--healthcheck` - Healthchecks.io ping URL for uptime monitoring
+- `--heartbeat` - Heartbeat interval in minutes (default: 5)
 
 ### Pushover Setup (Production)
 
@@ -123,6 +141,19 @@ Create a `config.py` file with your Pushover credentials:
 PUSHOVER_USER_KEY = "your_user_key"
 PUSHOVER_API_TOKEN = "your_api_token"
 ```
+
+### Healthchecks.io Setup (Production)
+
+Healthchecks.io monitors the Pi's uptime and alerts you if the script stops running (crash, power outage, wifi down, etc.).
+
+1. Create a free account at [healthchecks.io](https://healthchecks.io)
+2. Create a new check with a period slightly longer than your heartbeat interval (e.g., 6 minutes for a 5-minute heartbeat)
+3. Copy the ping URL (looks like `https://hc-ping.com/your-uuid`)
+4. Add Pushover as an integration and select your desired notification priority:
+   - **Priority 0** (Normal) - standard notification
+   - **Priority 1** (High) - bypasses quiet hours (recommended)
+   - **Priority 2** (Emergency) - requires acknowledgment, retries until ack'd
+5. Pass the URL to the script with `--healthcheck`
 
 ## Detection Algorithm
 

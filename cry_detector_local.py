@@ -66,6 +66,9 @@ class CryDetectorLocal:
         self.min_cry_duration = MIN_CRY_DURATION
         self.silence_gap = SILENCE_GAP
 
+        # Auto-stop settings
+        self.stop_time = None  # datetime.time object, e.g. 07:00
+
     def list_audio_devices(self):
         """List all available audio input devices"""
         print(f"\n{YELLOW}Available audio input devices:{RESET}")
@@ -110,6 +113,10 @@ class CryDetectorLocal:
             print(f"{YELLOW}Recording grace period: {RECORDING_GRACE_PERIOD}s, Min duration: {MIN_RECORDING_DURATION}s{RESET}")
         else:
             print(f"{YELLOW}Recording: Disabled (use --record to enable){RESET}")
+        if self.stop_time:
+            print(f"{GREEN}Auto-stop: {self.stop_time.strftime('%H:%M')}{RESET}")
+        else:
+            print(f"{YELLOW}Auto-stop: Disabled (use --stop-at HH:MM to enable){RESET}")
         print(f"\n{YELLOW}Press Ctrl+C to stop{RESET}\n")
 
     def analyze_audio(self, audio_data):
@@ -208,6 +215,14 @@ class CryDetectorLocal:
                 self.chunk_count += 1
                 current_time = time.time()
 
+                # Check if we should auto-stop
+                if self.stop_time:
+                    now = datetime.now().time()
+                    if now.hour == self.stop_time.hour and now.minute == self.stop_time.minute and now.second < 2:
+                        timestamp = datetime.now().strftime("%H:%M:%S")
+                        print(f"\n{GREEN}[{timestamp}] Auto-stop time reached ({self.stop_time.strftime('%H:%M')}). Shutting down...{RESET}")
+                        break
+
                 # Analyze for crying
                 is_crying_now, volume, freq, ratio = self.analyze_audio(audio_data)
 
@@ -286,12 +301,14 @@ class CryDetectorLocal:
                         self.initial_start_time = self.potential_cry_start_time
                         self.alert_sent = False
                         sustained_duration = current_time - self.potential_cry_start_time
-                        print(f"\n{RED}🍼 Baby started crying! (sustained for {sustained_duration:.1f}s, Vol: {volume:.0f}, Freq: {freq:.1f} Hz){RESET}")
+                        timestamp = datetime.now().strftime("%H:%M:%S")
+                        print(f"\n{RED}[{timestamp}] 🙁 Baby started crying! (sustained for {sustained_duration:.1f}s, Vol: {volume:.0f}, Freq: {freq:.1f} Hz){RESET}")
 
                     # Check if we should alert
                     elapsed_time = current_time - self.initial_start_time
                     if elapsed_time >= self.alert_window and not self.alert_sent:
-                        print(f"\n{RED}🚨 ALERT! Crying for {elapsed_time:.0f} seconds!{RESET}")
+                        timestamp = datetime.now().strftime("%H:%M:%S")
+                        print(f"\n{RED}[{timestamp}] 🚨 ALERT! Crying for {elapsed_time:.0f} seconds!{RESET}")
                         print(f"{RED}   (Episode started at {datetime.fromtimestamp(self.initial_start_time).strftime('%H:%M:%S')}){RESET}")
                         self.alert_sent = True
 
@@ -303,7 +320,8 @@ class CryDetectorLocal:
                         # Reset after silence window
                         if silence_duration >= self.reset_window:
                             episode_duration = self.last_cry_time - self.initial_start_time
-                            print(f"\n{GREEN}✓ Silence detected. Episode duration: {episode_duration:.1f} seconds{RESET}")
+                            timestamp = datetime.now().strftime("%H:%M:%S")
+                            print(f"\n{GREEN}[{timestamp}] ☺️ Baby settled! Episode duration: {episode_duration:.1f} seconds{RESET}")
                             print(f"{GREEN}   (Silent for {silence_duration:.1f} seconds){RESET}")
 
                             # Reset everything
@@ -362,6 +380,8 @@ if __name__ == "__main__":
                         help=f'Seconds of sustained crying before announcing episode (default: {MIN_CRY_DURATION})')
     parser.add_argument('--silence-gap', type=int, default=SILENCE_GAP,
                         help=f'Seconds of silence within crying that resets detection (default: {SILENCE_GAP})')
+    parser.add_argument('--stop-at', type=str, default=None,
+                        help='Time to auto-stop the script (HH:MM format, e.g. 07:00)')
     args = parser.parse_args()
 
     detector = CryDetectorLocal()
@@ -372,5 +392,12 @@ if __name__ == "__main__":
     detector.reset_window = args.reset
     detector.min_cry_duration = args.min_cry
     detector.silence_gap = args.silence_gap
+    if args.stop_at:
+        try:
+            h, m = args.stop_at.split(':')
+            detector.stop_time = datetime.strptime(f"{h}:{m}", "%H:%M").time()
+        except ValueError:
+            print(f"Invalid --stop-at format: '{args.stop_at}'. Use HH:MM (e.g. 07:00)")
+            exit(1)
     detector.start(device_index=args.device)
     detector.monitor()
