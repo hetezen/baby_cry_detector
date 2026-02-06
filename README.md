@@ -83,6 +83,7 @@ python cry_detector_local.py --stop-at 07:00
 - `-v, --volume` - Volume threshold
 - `-r, --ratio` - Cry frequency ratio threshold
 - `--record` - Enable recording of crying episodes
+- `--pushover` - Enable Pushover emergency notifications
 - `--alert` - Seconds of crying before alert
 - `--reset` - Seconds of silence before episode reset
 - `--min-cry` - Seconds of sustained crying before confirming episode

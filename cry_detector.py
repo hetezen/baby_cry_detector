@@ -98,6 +98,7 @@ class CryDetector:
         self.cry_ratio_threshold = CRY_RATIO_THRESHOLD
         self.enable_recording = False
         self.enable_pushover = False
+        self.pushover_device = None  # Send to all devices by default
         self.alert_window = ALERT_WINDOW
         self.reset_window = RESET_WINDOW
         self.min_cry_duration = MIN_CRY_DURATION
@@ -394,7 +395,8 @@ class CryDetector:
                                     title="🚨 BABY MONITOR EMERGENCY",
                                     priority=2,  # Emergency - requires acknowledgment
                                     retry=PUSHOVER_RETRY,    # Retry every 30 seconds
-                                    expire=PUSHOVER_EXPIRE   # Give up after 1 hour
+                                    expire=PUSHOVER_EXPIRE,  # Give up after 1 hour
+                                    device=self.pushover_device  # None sends to all devices
                                 )
                                 print(f"{GREEN}✓ Emergency notification sent! (will retry every {PUSHOVER_RETRY}s until acknowledged){RESET}")
                             except Exception as e:
@@ -461,6 +463,8 @@ if __name__ == "__main__":
                         help='Enable recording of crying episodes (default: disabled)')
     parser.add_argument('--pushover', action='store_true', default=False,
                         help='Enable Pushover emergency notifications (default: disabled)')
+    parser.add_argument('--pushover-device', type=str, default=None,
+                        help='Pushover device name to send to (default: all devices)')
     parser.add_argument('--alert', type=int, default=ALERT_WINDOW // 60,
                         help=f'Minutes of crying before alert (default: {ALERT_WINDOW // 60})')
     parser.add_argument('--reset', type=int, default=RESET_WINDOW // 60,
@@ -482,6 +486,7 @@ if __name__ == "__main__":
     detector.cry_ratio_threshold = args.ratio
     detector.enable_recording = args.record
     detector.enable_pushover = args.pushover and PUSHOVER_USER_KEY and PUSHOVER_API_TOKEN
+    detector.pushover_device = args.pushover_device
     detector.alert_window = args.alert * 60  # Convert minutes to seconds
     detector.reset_window = args.reset * 60
     detector.min_cry_duration = args.min_cry

@@ -2,7 +2,6 @@
 """
 Local development version of cry detector.
 Uses default microphone input for testing on laptop.
-Removes Pushover notifications and USB-specific features.
 """
 import pyaudio
 import numpy as np
@@ -10,6 +9,16 @@ from collections import deque
 import time
 from datetime import datetime
 import os
+import urllib.request
+import urllib.parse
+
+# Import Pushover credentials from config file
+try:
+    from config import PUSHOVER_USER_KEY, PUSHOVER_API_TOKEN
+except ImportError:
+    PUSHOVER_USER_KEY = None
+    PUSHOVER_API_TOKEN = None
+    print("Warning: config.py not found. Pushover notifications disabled.")
 
 # ANSI color codes
 RED = '\033[91m'
@@ -33,6 +42,10 @@ ALERT_WINDOW = 30  # Shorter for testing: alert after 30 seconds
 RESET_WINDOW = 10  # Shorter for testing: reset after 10 seconds of silence
 MIN_CRY_DURATION = 5  # Seconds of sustained crying before announcing episode (filters brief sounds)
 SILENCE_GAP = 5  # Seconds of silence within crying that resets potential cry detection
+
+# Pushover settings
+PUSHOVER_RETRY = 30   # Retry every 30 seconds if not acknowledged
+PUSHOVER_EXPIRE = 3600  # Give up after 1 hour
 
 # Recording settings (local directory)
 RECORDINGS_DIR = os.path.expanduser('~/Documents/babymonitor_recordings')
@@ -61,6 +74,8 @@ class CryDetectorLocal:
         self.volume_threshold = VOLUME_THRESHOLD
         self.cry_ratio_threshold = CRY_RATIO_THRESHOLD
         self.enable_recording = False
+        self.enable_pushover = False
+        self.pushover_device = None  # Send to all devices by default
         self.alert_window = ALERT_WINDOW
         self.reset_window = RESET_WINDOW
         self.min_cry_duration = MIN_CRY_DURATION
@@ -68,6 +83,14 @@ class CryDetectorLocal:
 
         # Auto-stop settings
         self.stop_time = None  # datetime.time object, e.g. 07:00
+
+        # Check Pushover credentials
+        if PUSHOVER_USER_KEY and PUSHOVER_API_TOKEN:
+            self.pushover_ready = True
+            print(f"{GREEN}✓ Pushover credentials loaded{RESET}")
+        else:
+            self.pushover_ready = False
+            print(f"{YELLOW}⚠ Pushover credentials not found - notifications disabled{RESET}")
 
     def list_audio_devices(self):
         """List all available audio input devices"""
@@ -113,11 +136,40 @@ class CryDetectorLocal:
             print(f"{YELLOW}Recording grace period: {RECORDING_GRACE_PERIOD}s, Min duration: {MIN_RECORDING_DURATION}s{RESET}")
         else:
             print(f"{YELLOW}Recording: Disabled (use --record to enable){RESET}")
+        if self.enable_pushover and self.pushover_ready:
+            print(f"{GREEN}Pushover: Enabled (retry every {PUSHOVER_RETRY}s, expire after {PUSHOVER_EXPIRE//60:.0f} min){RESET}")
+        else:
+            print(f"{YELLOW}Pushover: Disabled (use --pushover to enable){RESET}")
         if self.stop_time:
             print(f"{GREEN}Auto-stop: {self.stop_time.strftime('%H:%M')}{RESET}")
         else:
             print(f"{YELLOW}Auto-stop: Disabled (use --stop-at HH:MM to enable){RESET}")
         print(f"\n{YELLOW}Press Ctrl+C to stop{RESET}\n")
+
+    def send_pushover(self, message, title, priority=2):
+        """Send Pushover notification using direct API call"""
+        url = "https://api.pushover.net/1/messages.json"
+        data = {
+            "token": PUSHOVER_API_TOKEN,
+            "user": PUSHOVER_USER_KEY,
+            "message": message,
+            "title": title,
+            "priority": priority,
+        }
+        if self.pushover_device:
+            data["device"] = self.pushover_device
+        if priority == 2:  # Emergency priority requires retry and expire
+            data["retry"] = PUSHOVER_RETRY
+            data["expire"] = PUSHOVER_EXPIRE
+
+        try:
+            req_data = urllib.parse.urlencode(data).encode('utf-8')
+            req = urllib.request.Request(url, data=req_data)
+            urllib.request.urlopen(req, timeout=10)
+            return True
+        except Exception as e:
+            print(f"{RED}✗ Failed to send Pushover notification: {e}{RESET}")
+            return False
 
     def analyze_audio(self, audio_data):
         """Analyze audio chunk for crying"""
@@ -310,6 +362,16 @@ class CryDetectorLocal:
                         timestamp = datetime.now().strftime("%H:%M:%S")
                         print(f"\n{RED}[{timestamp}] 🚨 ALERT! Crying for {elapsed_time:.0f} seconds!{RESET}")
                         print(f"{RED}   (Episode started at {datetime.fromtimestamp(self.initial_start_time).strftime('%H:%M:%S')}){RESET}")
+
+                        # Send EMERGENCY Pushover notification
+                        if self.pushover_ready and self.enable_pushover:
+                            if self.send_pushover(
+                                f"Baby has been crying for {elapsed_time:.0f} seconds! Please check on the baby.",
+                                title="🚨 BABY MONITOR ALERT",
+                                priority=2
+                            ):
+                                print(f"{GREEN}✓ Emergency notification sent! (will retry every {PUSHOVER_RETRY}s until acknowledged){RESET}")
+
                         self.alert_sent = True
 
                 else:
@@ -372,6 +434,10 @@ if __name__ == "__main__":
                         help=f'Cry ratio threshold (default: {CRY_RATIO_THRESHOLD})')
     parser.add_argument('--record', action='store_true', default=False,
                         help='Enable recording of crying episodes (default: disabled)')
+    parser.add_argument('--pushover', action='store_true', default=False,
+                        help='Enable Pushover emergency notifications (default: disabled)')
+    parser.add_argument('--pushover-device', type=str, default=None,
+                        help='Pushover device name to send to (default: all devices)')
     parser.add_argument('--alert', type=int, default=ALERT_WINDOW,
                         help=f'Seconds of crying before alert (default: {ALERT_WINDOW})')
     parser.add_argument('--reset', type=int, default=RESET_WINDOW,
@@ -388,6 +454,8 @@ if __name__ == "__main__":
     detector.volume_threshold = args.volume
     detector.cry_ratio_threshold = args.ratio
     detector.enable_recording = args.record
+    detector.enable_pushover = args.pushover and PUSHOVER_USER_KEY and PUSHOVER_API_TOKEN
+    detector.pushover_device = args.pushover_device
     detector.alert_window = args.alert
     detector.reset_window = args.reset
     detector.min_cry_duration = args.min_cry
